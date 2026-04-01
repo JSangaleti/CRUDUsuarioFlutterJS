@@ -6,6 +6,9 @@ void main() {
   runApp(const MyApp());
 }
 
+// Para Flutter Web e Linux desktop, localhost costuma funcionar.
+// Para Android Emulator, troque para: http://10.0.2.2:3000
+// Para celular físico, use o IP da sua máquina, ex: http://192.168.0.10:3000
 const String baseUrl = 'http://localhost:3000';
 
 class MyApp extends StatelessWidget {
@@ -30,11 +33,7 @@ class Usuario {
   final String nome;
   final String email;
 
-  Usuario({
-    this.id,
-    required this.nome,
-    required this.email,
-  });
+  Usuario({this.id, required this.nome, required this.email});
 
   factory Usuario.fromJson(Map<String, dynamic> json) {
     return Usuario(
@@ -42,6 +41,10 @@ class Usuario {
       nome: json['nome'] ?? '',
       email: json['email'] ?? '',
     );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {'id': id, 'nome': nome, 'email': email};
   }
 }
 
@@ -70,7 +73,9 @@ class HomePage extends StatelessWidget {
                 onPressed: () {
                   Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => const CadastroPage()),
+                    MaterialPageRoute(
+                      builder: (_) => const FormularioUsuarioPage(),
+                    ),
                   );
                 },
                 child: const Text('CADASTRAR USUÁRIO'),
@@ -96,26 +101,40 @@ class HomePage extends StatelessWidget {
   }
 }
 
-class CadastroPage extends StatefulWidget {
-  const CadastroPage({super.key});
+class FormularioUsuarioPage extends StatefulWidget {
+  final Usuario? usuario;
+
+  const FormularioUsuarioPage({super.key, this.usuario});
 
   @override
-  State<CadastroPage> createState() => _CadastroPageState();
+  State<FormularioUsuarioPage> createState() => _FormularioUsuarioPageState();
 }
 
-class _CadastroPageState extends State<CadastroPage> {
+class _FormularioUsuarioPageState extends State<FormularioUsuarioPage> {
   final nomeController = TextEditingController();
   final emailController = TextEditingController();
   bool salvando = false;
+
+  bool get editando => widget.usuario != null;
+
+  @override
+  void initState() {
+    super.initState();
+
+    if (editando) {
+      nomeController.text = widget.usuario!.nome;
+      emailController.text = widget.usuario!.email;
+    }
+  }
 
   Future<void> salvarUsuario() async {
     final nome = nomeController.text.trim();
     final email = emailController.text.trim();
 
     if (nome.isEmpty || email.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Preencha nome e e-mail.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Preencha nome e e-mail.')));
       return;
     }
 
@@ -124,23 +143,36 @@ class _CadastroPageState extends State<CadastroPage> {
     });
 
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/usuarios'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'nome': nome,
-          'email': email,
-        }),
-      );
+      late http.Response response;
 
-      if (response.statusCode == 201) {
-        nomeController.clear();
-        emailController.clear();
-
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Usuário cadastrado com sucesso!')),
+      if (editando) {
+        response = await http.put(
+          Uri.parse('$baseUrl/usuarios/${widget.usuario!.id}'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'nome': nome, 'email': email}),
         );
+      } else {
+        response = await http.post(
+          Uri.parse('$baseUrl/usuarios'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'nome': nome, 'email': email}),
+        );
+      }
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        if (!mounted) return;
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              editando
+                  ? 'Usuário atualizado com sucesso!'
+                  : 'Usuário cadastrado com sucesso!',
+            ),
+          ),
+        );
+
+        Navigator.pop(context, true);
       } else {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -172,7 +204,7 @@ class _CadastroPageState extends State<CadastroPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Cadastrar Usuário'),
+        title: Text(editando ? 'Editar Usuário' : 'Cadastrar Usuário'),
       ),
       body: Center(
         child: SizedBox(
@@ -251,17 +283,91 @@ class _ListagemPageState extends State<ListagemPage> {
     });
   }
 
+  Future<void> editarUsuario(Usuario usuario) async {
+    final alterou = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => FormularioUsuarioPage(usuario: usuario),
+      ),
+    );
+
+    if (alterou == true) {
+      recarregar();
+    }
+  }
+
+  Future<void> excluirUsuario(Usuario usuario) async {
+    final confirmar = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Excluir usuário'),
+        content: Text('Deseja realmente excluir ${usuario.nome}?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Excluir'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmar != true) return;
+
+    try {
+      final response = await http.delete(
+        Uri.parse('$baseUrl/usuarios/${usuario.id}'),
+      );
+
+      if (response.statusCode == 200) {
+        if (!mounted) return;
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Usuário excluído com sucesso!')),
+        );
+
+        recarregar();
+      } else {
+        if (!mounted) return;
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao excluir: ${response.statusCode}')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Falha na conexão com o servidor.')),
+      );
+    }
+  }
+
+  Future<void> novoUsuario() async {
+    final alterou = await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const FormularioUsuarioPage()),
+    );
+
+    if (alterou == true) {
+      recarregar();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Listar Usuários'),
         actions: [
-          IconButton(
-            onPressed: recarregar,
-            icon: const Icon(Icons.refresh),
-          ),
+          IconButton(onPressed: recarregar, icon: const Icon(Icons.refresh)),
         ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: novoUsuario,
+        child: const Icon(Icons.add),
       ),
       body: FutureBuilder<List<Usuario>>(
         future: futurosUsuarios,
@@ -279,9 +385,7 @@ class _ListagemPageState extends State<ListagemPage> {
           final usuarios = snapshot.data ?? [];
 
           if (usuarios.isEmpty) {
-            return const Center(
-              child: Text('Nenhum usuário cadastrado.'),
-            );
+            return const Center(child: Text('Nenhum usuário cadastrado.'));
           }
 
           return ListView.builder(
@@ -292,6 +396,19 @@ class _ListagemPageState extends State<ListagemPage> {
                 leading: const Icon(Icons.person),
                 title: Text(usuario.nome),
                 subtitle: Text(usuario.email),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.edit),
+                      onPressed: () => editarUsuario(usuario),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.delete),
+                      onPressed: () => excluirUsuario(usuario),
+                    ),
+                  ],
+                ),
               );
             },
           );
